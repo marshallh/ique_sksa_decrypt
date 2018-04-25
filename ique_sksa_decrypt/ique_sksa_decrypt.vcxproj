@@ -76,9 +76,6 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <Text Include="ReadMe.txt" />
-  </ItemGroup>
-  <ItemGroup>
     <ClInclude Include="aes.h" />
     <ClInclude Include="sha1.h" />
     <ClInclude Include="targetver.h" />

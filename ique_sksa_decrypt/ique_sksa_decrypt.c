@@ -79,10 +79,10 @@ int main(int argc, char* argv[])
 	FILE *fp;
 	FILE *fp_out;
 
-	char key_common[16];
-	char key_sk_key[16];
-	char key_sk_iv[16];
-	char filename[256] = {0, };
+	char key_common[16] = { 0, };
+	char key_sk_key[16] = { 0, };
+	char key_sk_iv[16] = { 0, };
+	char filename[256] = { 0, };
 	char filename_sk[256] = { 0, };
 	char filename_sa1[256] = { 0, };
 	char filename_sa2[256] = { 0, };
@@ -182,6 +182,7 @@ int main(int argc, char* argv[])
 
 	printf("* Opening SKSA binary %s\n", filename);
 	fp = fopen(filename, "rb");
+	if (fp == NULL) die("Couldn't open file");
 
 	if (filename_sk[0] != 0){
 		printf("* Decrypting SK to file %s\n", filename_sk);
