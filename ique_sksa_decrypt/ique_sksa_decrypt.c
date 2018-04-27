@@ -1,19 +1,23 @@
 //
-// ique_sksa_decrypt 0.1
+// ique_sksa_decrypt 0.2
 // 2018 marshallh
 //
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "aes.h"
 #include "sha1.h"
 
+// little endian host platform is assumed, nop this if you're big endian
 #define BYTESWAP_32(x)  ((x >> 24) | ((x << 8) & 0x00ff0000) | ((x >> 8) & 0x0000ff00) | (x << 24))
 
+void decrypt_sk(char *infilename, char *outfilename, uint8_t *skey, uint8_t *siv);
+void decrypt_sa(char *infilename, char *outfilename, uint8_t *ckey, struct cmd *sa_cmd, unsigned char *sa_hash, int offset);
 void die(char *reason);
 int parse_hex_to_char(char *inp, char *outp, int len);
-void print_key(char *msg, unsigned char *key);
-void print_hash(char *msg, unsigned char *hash);
+void print_key(char *msg, uint8_t *key);
+void print_hash(char *msg, uint8_t *hash);
 
 
 // struct from SUXXORS release nfo
@@ -69,43 +73,25 @@ struct cmd {
 };
 
 int verbose = 0;
-
-                                                                
+                         
 int main(int argc, char* argv[])
 {
 	int ca;
-	int i;
-	
-	FILE *fp;
-	FILE *fp_out;
 
-	char key_common[16] = { 0, };
-	char key_sk_key[16] = { 0, };
-	char key_sk_iv[16] = { 0, };
+	uint8_t key_common[16] = { 0, };
+	uint8_t key_sk_key[16] = { 0, };
+	uint8_t key_sk_iv[16] = { 0, };
+	uint8_t key_empty[16] = { 0, };
 	char filename[256] = { 0, };
 	char filename_sk[256] = { 0, };
 	char filename_sa1[256] = { 0, };
 	char filename_sa2[256] = { 0, };
 
-	char key_empty[16] = {0, };
-	unsigned char *sk_data = NULL;
-	unsigned char *sa1_data = NULL;
-	unsigned char *sa2_data = NULL;
+	uint32_t sa_size[2] = { 0, };
+	unsigned char sa_hash[20][2] = { 0, };
+	struct cmd sa_cmd[2] = { 0, };
 
-	uint32_t sa1_size = 0;
-	uint32_t sa2_size = 0;
-
-	struct cmd sa1_cmd = { 0,  };
-	struct cmd sa2_cmd = { 0, };
-	struct AES_ctx ctx;
-	struct sha1_ctx sha;
-
-	unsigned char sa1_hash[20] = { 0, };
-	unsigned char sa2_hash[20] = { 0, };
-
-	uint8_t header_expected[4] = {0x80, 0x37, 0x12, 0x40};
-
-	printf("ique_sksa_decrypt 0.1 by marshallh\n");
+	printf("ique_sksa_decrypt 0.2 by marshallh\n");
 	printf("----------------------------------\n");
 	if (argc == 1){
 		printf("Arguments: ique_sksa_decrypt\n");
@@ -113,185 +99,149 @@ int main(int argc, char* argv[])
 		printf("\t[-skout <sk_out filename>]\n");
 		printf("\t[-sa1out <sa1_out filename>]\n");
 		printf("\t[-sa2out <sa2_out filename>]\n");
-		printf("\t -ckey <common_key>\n");
-		printf("\t -skey <sk_key>\n");
-		printf("\t -siv <sk_iv>\n");
-		printf("\t -v (enables verbose printing of values)\n");
+		printf("\t[-ckey <common_key>]\n");
+		printf("\t[-skey <sk_key>]\n");
+		printf("\t[-siv <sk_iv>]\n");
+		printf("\t[-v] (enables verbose printing of values)\n");
 		printf("You may either choose to extract SK, SA1, or SA1+SA2.\n");
 		printf("Specifying a filename means you want to extract it.\n");
+		printf("Extracting SK requires skey/siv, extracting SA1/2 requires ckey.\n");
 	}
-
-
+	
 	for (ca = 1; ca < argc; ca++){
-		if (!strcmp(argv[ca], "-f")){
-			if (++ca < argc ){
-				sscanf(argv[ca], "%s", filename);
-			} else {
-				printf("No filename specified"); return -1;
-			}
-		} else if (!strcmp(argv[ca], "-skout")){
-			if (++ca < argc){
-				sscanf(argv[ca], "%s", filename_sk);
-			}
-			else {
-				printf("No sk out filename specified"); return -1;
-			}
-		} else if (!strcmp(argv[ca], "-sa1out")){
-			if (++ca < argc){
-				sscanf(argv[ca], "%s", filename_sa1);
-			}
-			else {
-				printf("No sa1 out filename specified"); 
-			}
-		} else if (!strcmp(argv[ca], "-sa2out")){
-			if (++ca < argc){
-				sscanf(argv[ca], "%s", filename_sa2);
-			}
-			else {
-				printf("No sa2 out filename specified"); 
-			}
-		}
-		else if (!strcmp(argv[ca], "-ckey")){
-			if (++ca < argc){
-				parse_hex_to_char(argv[ca], key_common, 16);
-			}
-			else {
-				printf("Invalid/missing commonkey");
-			}
-		} else if (!strcmp(argv[ca], "-skey")){
-			if (++ca < argc){
-				parse_hex_to_char(argv[ca], key_sk_key, 16);
-			}
-			else {
-				printf("Invalid/missing sk_key");
-			}
-		} else if (!strcmp(argv[ca], "-siv")){
-			if (++ca < argc){
-				parse_hex_to_char(argv[ca], key_sk_iv, 16);
-			}
-			else {
-				printf("Invalid/missing sk_iv");
-			}
-		}
-		else if(!strcmp(argv[ca], "-v")){
+		if (!strcmp(argv[ca], "-f")) {
+			if (++ca < argc ) sscanf(argv[ca], "%s", filename);
+			else {printf("No filename specified"); return -1;}
+		} else if (!strcmp(argv[ca], "-skout")) {
+			if (++ca < argc) sscanf(argv[ca], "%s", filename_sk);
+			else {printf("No sk out filename specified"); return -1;}
+		} else if (!strcmp(argv[ca], "-sa1out")) {
+			if (++ca < argc) sscanf(argv[ca], "%s", filename_sa1);
+			else printf("No sa1 out filename specified"); 
+		} else if (!strcmp(argv[ca], "-sa2out")) {
+			if (++ca < argc) sscanf(argv[ca], "%s", filename_sa2);
+			else printf("No sa2 out filename specified"); 
+		} else if (!strcmp(argv[ca], "-ckey") ){
+			if (++ca < argc) parse_hex_to_char(argv[ca], key_common, 16);
+			else printf("Invalid/missing commonkey");
+		} else if (!strcmp(argv[ca], "-skey")) {
+			if (++ca < argc) parse_hex_to_char(argv[ca], key_sk_key, 16);
+			else printf("Invalid/missing sk_key");
+		} else if (!strcmp(argv[ca], "-siv")) {
+			if (++ca < argc) parse_hex_to_char(argv[ca], key_sk_iv, 16);
+			else printf("Invalid/missing sk_iv");
+		} else if(!strcmp(argv[ca], "-v")) {
 			verbose = 1;
 		}
 	}
-
 	if (filename[0] == 0) die("No filename specified");
 
 	printf("* Opening SKSA binary %s\n", filename);
-	fp = fopen(filename, "rb");
-	if (fp == NULL) die("Couldn't open file");
 
 	if (filename_sk[0] != 0){
 		printf("* Decrypting SK to file %s\n", filename_sk);
 		if (memcmp(key_empty, key_sk_key, 16) == 0) die("Missing SK Key");
 		if (memcmp(key_empty, key_sk_iv, 16) == 0) die("Missing SK IV");
-		sk_data = malloc(65536); if (sk_data == NULL) die("Couldn't malloc SK");
-		fread(sk_data, 1, 65536, fp);
-		AES_init_ctx_iv(&ctx, key_sk_key, key_sk_iv);
-		AES_CBC_decrypt_buffer(&ctx, sk_data, 65536);
-		fp_out = fopen(filename_sk, "wb");
-		fwrite(sk_data, 1, 65536, fp_out);
-		fclose(fp_out);
+		decrypt_sk(filename, filename_sk, key_sk_key, key_sk_iv);
 	}
 
 	if (filename_sa1[0] != 0){
 		printf("* Decrypting SA1 to file %s\n", filename_sa1);
 		if (memcmp(key_empty, key_common, 16) == 0) die("Missing common key");
-		fseek(fp, 0x10000, SEEK_SET);
-		fread(&sa1_cmd, sizeof(struct cmd), 1, fp);
-		// please note while we've read in the data, all fields are wrong-endian so we must 
-		// take care to endian swap any data we want to read from the struct
-		sa1_size = BYTESWAP_32(sa1_cmd.content_size);
-		printf("SA1 is %d/0x%X bytes\n", sa1_size, sa1_size);
-		printf("SA1 is content ID %d\n", BYTESWAP_32(sa1_cmd.content_id));
-		if (sa1_size % 16 != 0) die("SA1 size is not a modulus of 16, something is very wrong");
-		sa1_data = malloc(sa1_size); if (sa1_size == NULL) die("Couldn't malloc SA1");
-		fseek(fp, 0x14000, SEEK_SET);
-		fread(sa1_data, sa1_size, 1, fp);
-
-		printf("SA1 signer is %s\n", sa1_cmd.signer);
-		print_hash("SA1 content hash is", sa1_cmd.content_hash);
-		print_key ("SA1 titlekey_iv is", sa1_cmd.titlekey_iv);
-		print_key ("SA1 content_iv i ", sa1_cmd.content_iv);
-		print_key("SA1 titlekey(crypted) is", sa1_cmd.titlekey);
-		// first, decrypt the SA's titlekey with common key
-		AES_init_ctx_iv(&ctx, key_common, sa1_cmd.titlekey_iv);
-		AES_CBC_decrypt_buffer(&ctx, sa1_cmd.titlekey, 16);
-		print_key("SA1 titlekey(decrypted) is", sa1_cmd.titlekey);
-		// now use decrypted titlekey to decrypt the payload
-		AES_init_ctx_iv(&ctx, sa1_cmd.titlekey, sa1_cmd.content_iv);
-		AES_CBC_decrypt_buffer(&ctx, sa1_data, sa1_size);
-
-		sha1_buffer(sa1_data, sa1_size, sa1_hash);
-		print_hash("SA1 computed hash is", sa1_hash);
-		if (memcmp(sa1_hash, sa1_cmd.content_hash, 20) == 0)
-			printf("SA1 content hash matches internal hash\n") ;
-		else 
-			printf("SA1 content has does NOT match\n");
-
-		// write decrypted to file
-		fp_out = fopen(filename_sa1, "wb");
-		fwrite(sa1_data, 1, sa1_size, fp_out);
-		fclose(fp_out);
-		if (memcmp(header_expected, sa1_data, 4) != 0) printf("Extracted SA1 contains some type of metadata, FYI.\n");
+		printf("* SA1:\n");
+		decrypt_sa(filename, filename_sa1, key_common, &sa_cmd[0], &sa_hash[0][0], 0x10000);
 	}
 
 	if (filename_sa2[0] != 0){
-		if (filename_sa2[0] == 0) die("You must extract SA1 as well if you want SA2");
-	
 		printf("* Decrypting SA2 to file %s\n", filename_sa2);
+		if (filename_sa2[0] == 0) die("You must extract SA1 as well if you want SA2");
 		if (memcmp(key_empty, key_common, 16) == 0) die("Missing common key");
-		fseek(fp, 0x14000 + sa1_size, SEEK_SET);
-		fread(&sa2_cmd, sizeof(struct cmd), 1, fp);
-		// please note while we've read in the data, all fields are wrong-endian so we must 
-		// take care to endian swap any data we want to read from the struct
-		sa2_size = BYTESWAP_32(sa2_cmd.content_size);
-		if (sa2_size == 0) die("SA2 doesn't exist");
-		printf("SA2 is %d/0x%X bytes\n", sa2_size, sa2_size);
-		printf("SA2 is content ID %d\n", BYTESWAP_32(sa2_cmd.content_id));
-		if (sa2_size % 16 != 0) die("SA2 size is not a modulus of 16, something is very wrong");
-		sa2_data = malloc(sa2_size); if (sa2_size == NULL) die("Couldn't malloc SA2");
-		fseek(fp, 0x18000 + sa1_size, SEEK_SET);
-		fread(sa2_data, sa2_size, 1, fp);
-
-		printf("SA2 signer is %s\n", sa2_cmd.signer);
-		print_hash("SA2 content hash is", sa2_cmd.content_hash);
-		print_key("SA2 titlekey_iv is", sa2_cmd.titlekey_iv);
-		print_key("SA2 content_iv is", sa2_cmd.content_iv);
-		print_key("SA2 titlekey(crypted) is", sa2_cmd.titlekey);
-		// first, decrypt the SA's titlekey with common key
-		AES_init_ctx_iv(&ctx, key_common, sa2_cmd.titlekey_iv);
-		AES_CBC_decrypt_buffer(&ctx, sa2_cmd.titlekey, 16);
-		print_key("SA2 titlekey(decrypted) is", sa2_cmd.titlekey);
-		// now use decrypted titlekey to decrypt the payload
-		AES_init_ctx_iv(&ctx, sa2_cmd.titlekey, sa2_cmd.content_iv);
-		AES_CBC_decrypt_buffer(&ctx, sa2_data, sa2_size);
-
-		sha1_buffer(sa2_data, sa2_size, sa2_hash);
-		print_hash("SA2 computed hash is", sa2_hash);
-		if (memcmp(sa1_hash, sa1_cmd.content_hash, 20) == 0)
-			printf("SA2 content hash matches internal hash\n");
-		else
-			printf("SA2 content has does NOT match\n");
-
-		// write decrypted to file
-		fp_out = fopen(filename_sa2, "wb");
-		fwrite(sa2_data, 1, sa2_size, fp_out);
-		fclose(fp_out);
+		printf("* SA2:\n");
+		decrypt_sa(filename, filename_sa2, key_common, &sa_cmd[1], &sa_hash[0][1], 0x14000 + BYTESWAP_32(sa_cmd[0].content_size));
 	}
-
-	
-	if (sk_data != NULL) free(sk_data);
-	if (sa1_data != NULL) free(sa1_data);
-	if (sa2_data != NULL) free(sa2_data);
-	fclose(fp);
 
 	printf("* Done\n");
 	return 0;
 }
+
+void decrypt_sk(char *infilename, char *outfilename, uint8_t *skey, uint8_t *siv)
+{
+	uint8_t *buf = NULL;
+	FILE *fp;
+	FILE *fp_out;
+	struct AES_ctx ctx;
+
+	fp = fopen(infilename, "rb"); if (fp == NULL) die("Couldn't open inputfile");
+	buf = malloc(65536); if (buf == NULL) die("Couldn't malloc SK");
+
+	fread(buf, 1, 65536, fp);
+	AES_init_ctx_iv(&ctx, skey, siv);
+	AES_CBC_decrypt_buffer(&ctx, buf, 65536);
+	fp_out = fopen(outfilename, "wb");
+	fwrite(buf, 1, 65536, fp_out);
+	fclose(fp_out);
+
+	fclose(fp);
+	if(buf != NULL) free(buf);
+}
+
+void decrypt_sa(char *infilename, char *outfilename, uint8_t *ckey, struct cmd *sa_cmd, unsigned char *sa_hash, int offset)
+{
+	uint8_t *sa_data = NULL;
+	FILE *fp;
+	FILE *fp_out;
+	struct AES_ctx ctx;
+	int sa_size;
+	uint8_t header_expected[4] = { 0x80, 0x37, 0x12, 0x40 };
+
+	fp = fopen(infilename, "rb"); if (fp == NULL) die("Couldn't open inputfile");
+	fseek(fp, offset, SEEK_SET);
+	fread(sa_cmd, sizeof(struct cmd), 1, fp);
+	// please note while we've read in the data, all fields are wrong-endian so we must 
+	// take care to endian swap any data we want to read from the struct
+	sa_size = BYTESWAP_32(sa_cmd->content_size);
+	printf("SA is %d/0x%X bytes\n", sa_size, sa_size);
+	printf("SA is content ID %d\n", BYTESWAP_32(sa_cmd->content_id));
+	if (sa_size % 16 != 0) die("SA size is not a modulus of 16, something is very wrong");
+	if (sa_size == 0) {
+		printf("SA doesn't exist, skipping\n");
+		goto bail;
+	}
+	sa_data = malloc(sa_size); if (sa_data == NULL) die("Couldn't malloc SA");
+
+	fseek(fp, offset + 0x4000, SEEK_SET);
+	fread(sa_data, sa_size, 1, fp);
+
+	printf("SA signer is %s\n", sa_cmd->signer);
+	print_hash("SA content hash is", sa_cmd->content_hash);
+	print_key("SA titlekey_iv is", sa_cmd->titlekey_iv);
+	print_key("SA content_iv is", sa_cmd->content_iv);
+	print_key("SA titlekey(crypted) is", sa_cmd->titlekey);
+	// first, decrypt the SA's titlekey with common key
+	AES_init_ctx_iv(&ctx, ckey, sa_cmd->titlekey_iv);
+	AES_CBC_decrypt_buffer(&ctx, sa_cmd->titlekey, 16);
+	print_key("SA titlekey(decrypted) is", sa_cmd->titlekey);
+	// now use decrypted titlekey to decrypt the payload
+	AES_init_ctx_iv(&ctx, sa_cmd->titlekey, sa_cmd->content_iv);
+	AES_CBC_decrypt_buffer(&ctx, sa_data, sa_size);
+
+	sha1_buffer(sa_data, sa_size, sa_hash);
+	print_hash("SA computed hash is", sa_hash);
+	if (memcmp(sa_hash, sa_cmd->content_hash, 20) == 0)
+		printf("SA content hash matches internal hash\n");
+	else
+		printf("SA content has does NOT match\n");
+
+	// write decrypted to file
+	fp_out = fopen(outfilename, "wb");
+	fwrite(sa_data, 1, sa_size, fp_out);
+	fclose(fp_out);
+	if (memcmp(header_expected, sa_data, 4) != 0) printf("Extracted SA1 contains some type of metadata, FYI.\n");
+bail:
+	fclose(fp);
+	if(sa_data != NULL) free(sa_data);
+}
+
 
 void die(char *reason)
 {
@@ -313,7 +263,7 @@ int parse_hex_to_char(char *inp, char *outp, int len)
 	return 0;
 }
 
-void print_key(char *msg, unsigned char *key)
+void print_key(char *msg, uint8_t *key)
 {
 	if (!verbose) return;
 	printf("%s ", msg);
@@ -323,7 +273,7 @@ void print_key(char *msg, unsigned char *key)
 	printf("\n");
 }
 
-void print_hash(char *msg, unsigned char *hash)
+void print_hash(char *msg, uint8_t *hash)
 {
 	if (!verbose) return;
 	printf("%s ", msg);
