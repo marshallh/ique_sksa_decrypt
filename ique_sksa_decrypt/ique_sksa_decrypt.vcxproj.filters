@@ -24,6 +24,9 @@
     <ClInclude Include="sha1.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="tinf.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ique_sksa_decrypt.c">
@@ -33,6 +36,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="sha1.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="tinflate.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
